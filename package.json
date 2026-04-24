@@ -1,0 +1,15 @@
+{
+  "name": "todo-board",
+  "version": "1.0.0",
+  "description": "Lightweight Kanban task board — Express + better-sqlite3, zero frontend framework",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["todo", "kanban", "task-board", "express", "sqlite"],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.0",
+    "better-sqlite3": "^11.0.0"
+  }
+}
