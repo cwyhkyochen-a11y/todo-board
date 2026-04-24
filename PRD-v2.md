@@ -1,182 +1,310 @@
-# TodoBoard v2.0 — 集团项目管理平台 产品方案
+# TodoBoard v2.0 — 集团数字化底座 产品方案
 
 ## 定位
 
-**以 AI 对话为主要交互界面的集团项目管理工具。**
+**以 AI 对话为主要交互界面的集团数字化平台。**
 
-传统项目管理系统让人去学页面、找按钮、填表单。我们反过来：让 OpenClaw 做中间人，用户说人话，AI 操作系统。看板/列表只是"看结果"的地方，不是"做事情"的地方。
+五个子系统协作，覆盖项目、人事、会议、日报、AI 基础设施。不碰 OA 流程审批，专注"人的工作产出"这个维度。
 
-## 核心理念
-
-```
-传统模式：人 → 管理页面 → 系统
-我们的模式：人 → OpenClaw（对话）→ 系统 → 结果（看板/通知/报告）
-```
-
-- **操作层**：OpenClaw Skill 接管 90% 的 CRUD 操作
-- **展示层**：保留看板/列表/仪表盘，但只做只读展示 + 少量交互
-- **管理层**：不建传统管理后台，管理操作全部走对话
-
-## 用户故事
-
-| 场景 | 传统方式 | 我们的方式 |
-|------|---------|-----------|
-| 创建项目 | 找到"新建项目"按钮 → 填表单 → 保存 | 跟 AI 说："建个项目叫 Q2 营销活动，把市场部的人都加进去" |
-| 分配任务 | 打开项目 → 找任务 → 编辑 → 选人 → 保存 | "把写方案这个任务分给小王" |
-| 查进度 | 进项目 → 看看板 → 统计 | "Q2 营销活动进度怎么样？" 或者打开看板直接看 |
-| 管成员 | 成员管理页 → 搜索 → 编辑 | "把小李从技术部调到产品部" |
-| 看全局 | 无（需要逐个项目看） | "集团现在有多少个项目在跑？哪些任务过期了？" |
-| 开会 | 发邮件约时间 → 抢会议室 → 开完没结论 | "这事要不要开个会？" → AI 判断 → 自动发起 → 生成纪要 |
-
-## 技术选型（3000 人规模）
-
-| 组件 | 选择 | 理由 |
-|------|------|------|
-| **数据库** | **MySQL 8.0** | 3000 人 + 多项目 + 权限查询，SQLite 的并发和 JOIN 性能不够 |
-| **ORM** | **Prisma** | 类型安全，schema 管理，迁移方便 |
-| **后端** | Express（不变） | 够用 |
-| **前端** | Vanilla（不变） | 看板部分保持轻量 |
-| **认证** | **JWT + bcrypt** | 3000 人必须有登录系统 |
-| **实时** | **Socket.io** | 任务变更实时推送到看板 |
-
-### 为什么弃 SQLite
+## 总体架构
 
 ```
-SQLite 问题（3000 人场景）：
-- 写锁：多人同时更新任务会排队
-- 无用户系统：没有原生的认证/权限支持
-- JOIN 性能：组织架构查询（部门→成员→项目→任务）多表 JOIN 慢
-- 运维：不好做备份、监控、主从
-
-MySQL 优势：
-- 行级锁，并发写入无压力
-- 成熟的用户/权限体系
-- 复杂查询优化器
-- 运维工具丰富
+┌─────────────────────────────────────────────────────────┐
+│                    OpenClaw (AI 交互层)                    │
+│         所有操作通过对话完成，不建传统管理后台                    │
+├─────────┬─────────┬─────────┬─────────┬─────────┤
+│ AI Infra │  人资画像  │  项目档案  │   会议    │   日报   │
+│  平台    │  平台    │  平台    │  平台    │  平台   │
+└─────────┴─────────┴─────────┴─────────┴─────────┘
+         │              │            │          │
+         └──────────────┼────────────┼──────────┘
+                        │            │
+                   ┌────▼────────────▼────┐
+                   │      MySQL 8.0       │
+                   │   统一数据底座        │
+                   └─────────────────────┘
 ```
 
-## 数据模型
+## 五个子系统
+
+### 1. AI Infra 平台
+
+管理 AI 的用量、安全、Skill、认证、Key、Model。
 
 ```
-集团 (Organization)
-├── 部门 (Department) ← 多级树
-│   └── 成员 (Member)
-├── 项目 (Project)
-│   ├── 项目成员 (ProjectMember) ← 带角色
-│   ├── 任务 (Task) ← 带指派
-│   │   └── 评论 (Comment)
-│   └── 会议 (Meeting) ← AI 判断 + 发起
-│       ├── 参会人 (MeetingAttendee)
-│       └── 会议纪要 (MeetingMinutes)
-└── 角色权限 (Role + Permission)
+职责：
+- Skill 注册/版本管理（哪些 Skill 可用、谁能用）
+- API Key 管理（各子系统调用 LLM 的 Key）
+- Model 配置（不同场景用不同模型）
+- 用量统计（谁用了多少 token、花了多少钱）
+- 安全审计（哪些对话触发了敏感操作）
+
+不做什么：
+- 不管具体业务逻辑
+- 不存储业务数据
 ```
 
-### 表结构
+### 2. 人资画像平台
+
+完整的人力主数据 + 评估档案。
+
+```
+主数据：
+- 员工基本信息（姓名、部门、职位、入职时间）
+- 组织架构（部门树、汇报关系）
+- 职级/薪酬带宽（如有需要）
+
+评估档案（子表，数据从其他系统自动汇聚）：
+┌──────────────────────────────────────┐
+│          员工画像 - 小王              │
+├──────────────────────────────────────┤
+│ 敬业度指标                            │
+│  ├── 任务完成率：92%（项目系统）        │
+│  ├── 响应速度：平均 2.3 小时（日报系统） │
+│  └── 会议参与度：85%（会议系统）        │
+│                                      │
+│ 胜任力指标                            │
+│  ├── 技术深度：高级（项目贡献评估）      │
+│  ├── 跨部门协作：3 个项目（项目系统）    │
+│  └── 主动性：提出 12 条改进建议（会议）  │
+│                                      │
+│ 成长轨迹                              │
+│  ├── Q1: 完成 XX 项目核心模块          │
+│  ├── Q2: 晋升为技术负责人              │
+│  └── 近期：主导了 YY 方案评审          │
+└──────────────────────────────────────┘
+```
+
+### 3. 项目档案平台（原 TodoBoard 升级）
+
+项目主档 + 看板 + Wiki。
+
+```
+项目主档：
+- 项目基本信息（名称、状态、负责人、成员）
+- 看板（任务管理，继承 v1）
+- 项目 Wiki（类似 Notion 的文档空间）
+
+Wiki 功能：
+- 项目文档（需求文档、设计文档、技术方案）
+- 会议纪要自动归档到项目 Wiki
+- 日报/周报自动汇总到项目 Wiki
+- 支持 Markdown 编辑
+```
+
+### 4. 会议平台
+
+AI 判断 → 创建 → 开会 → 纪要 → 关联项目。
+
+```
+核心流程：
+1. 有人想开会 → AI 判断是否必要
+2. 有必要 → 填目的/议题 → 预订会议室（企微）→ 通知参会人
+3. 开会
+4. AI 生成纪要 → 提取决议和待办
+5. 待办自动转入项目看板
+6. 纪要归档到项目 Wiki
+
+数据流向：
+会议 → 待办 → 项目进度更新
+会议 → 个人贡献 → 人资评估档案
+会议 → 纪要 → 项目 Wiki
+```
+
+### 5. 日报平台
+
+日报/周报/月报，自动生成 + 手动补充。
+
+```
+两种生成方式：
+
+1. 自动生成（从项目数据）
+   - 今天更新了哪些任务
+   - 哪些任务完成/开始/过期
+   - 参加了什么会、决议是什么
+   → 系统汇总，用户确认/补充 → 发出
+
+2. 手动口述
+   - "今天主要做了 XX 的方案设计，明天继续"
+   → AI 结构化 → 写入日报
+
+反向更新：
+- 日报内容 → 更新项目进度（"今天完成了 XX" → 任务标记 done）
+- 日报内容 → 更新员工画像（工作量、响应速度、主动性）
+
+周报/月报：
+- 自动聚合本周/本月的日报
+- AI 提取亮点和问题
+- 生成结构化报告
+```
+
+## 系统间数据流
+
+```
+人资画像平台
+    ▲
+    │ 评估数据（敬业度/胜任力/成长）
+    │
+    ├──────────────┬──────────────┐
+    │              │              │
+项目档案平台 ◄─── 会议平台 ◀─── 日报平台
+    │              │              │
+    │ 待办/进度    │ 纪要/决议    │ 日报/周报
+    │              │              │
+    └──────┬───────┴──────┬───────┘
+           │              │
+           ▼              ▼
+        看板展示      项目 Wiki
+
+AI Infra 平台（横切面）
+    ├── Skill 管理：哪些 Skill 可用
+    ├── Key 管理：各系统调 LLM 的凭证
+    ├── 用量统计：token 消耗
+    └── 安全审计：敏感操作日志
+```
+
+### 数据流向明细
+
+| 从 | 到 | 数据 |
+|----|-----|------|
+| 项目系统 | 日报系统 | 今日任务变更 → 自动填充日报 |
+| 日报系统 | 项目系统 | "今天完成了 XX" → 任务标记 done |
+| 会议系统 | 项目系统 | 会议决议 → 自动生成待办 |
+| 会议系统 | 项目 Wiki | 会议纪要 → 归档到项目文档 |
+| 日报系统 | 人资系统 | 工作量/响应速度 → 更新员工画像 |
+| 会议系统 | 人资系统 | 会议贡献/汇报质量 → 更新评估 |
+| 项目系统 | 人资系统 | 任务完成率/跨部门协作 → 更新评估 |
+
+## 数据模型（统一）
+
+### AI Infra
 
 ```sql
--- 集团
-CREATE TABLE organizations (
+-- Skill 注册表
+CREATE TABLE skills (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(100) NOT NULL,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  display_name VARCHAR(100),
+  description TEXT,
+  version VARCHAR(20),
+  config JSON,                    -- Skill 配置（触发词、API 地址等）
+  status ENUM('active','disabled') DEFAULT 'active',
   created_at DATETIME DEFAULT NOW()
 );
 
--- 部门（支持多级）
-CREATE TABLE departments (
+-- API Key 管理
+CREATE TABLE api_keys (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  org_id BIGINT NOT NULL,
-  parent_id BIGINT NULL,
-  name VARCHAR(100) NOT NULL,
-  sort_order INT DEFAULT 0,
-  INDEX idx_org_parent (org_id, parent_id),
-  FOREIGN KEY (org_id) REFERENCES organizations(id),
-  FOREIGN KEY (parent_id) REFERENCES departments(id)
+  key_hash VARCHAR(255) NOT NULL UNIQUE,
+  name VARCHAR(100),
+  provider VARCHAR(50),           -- openai / xiaomimimo / deepseek
+  model VARCHAR(100),
+  quota_tokens BIGINT DEFAULT 0,  -- 配额（0=无限）
+  used_tokens BIGINT DEFAULT 0,
+  owner_type ENUM('system','member') DEFAULT 'system',
+  owner_id BIGINT,
+  status ENUM('active','exhausted','disabled') DEFAULT 'active',
+  created_at DATETIME DEFAULT NOW()
 );
 
--- 成员
-CREATE TABLE members (
+-- 用量日志
+CREATE TABLE usage_logs (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  org_id BIGINT NOT NULL,
-  dept_id BIGINT NULL,
-  name VARCHAR(50) NOT NULL,
-  email VARCHAR(100) UNIQUE,
-  password_hash VARCHAR(255),     -- bcrypt
-  avatar VARCHAR(255),
-  org_role ENUM('admin','dept_lead','member') DEFAULT 'member',
-  status ENUM('active','disabled') DEFAULT 'active',
-  last_login_at DATETIME,
+  api_key_id BIGINT,
+  skill_id BIGINT,
+  member_id BIGINT,
+  model VARCHAR(100),
+  input_tokens INT,
+  output_tokens INT,
+  cost_cents INT,                 -- 费用（分）
+  latency_ms INT,
   created_at DATETIME DEFAULT NOW(),
-  INDEX idx_org_dept (org_id, dept_id),
-  INDEX idx_email (email),
-  FOREIGN KEY (org_id) REFERENCES organizations(id),
-  FOREIGN KEY (dept_id) REFERENCES departments(id)
+  INDEX idx_key_date (api_key_id, created_at),
+  INDEX idx_member_date (member_id, created_at)
 );
 
--- 项目
-CREATE TABLE projects (
+-- 审计日志
+CREATE TABLE audit_logs (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  org_id BIGINT NOT NULL,
-  name VARCHAR(100) NOT NULL,
-  description TEXT,
-  status ENUM('active','archived','paused') DEFAULT 'active',
-  created_by BIGINT,
+  member_id BIGINT,
+  action VARCHAR(50),             -- create_project / delete_task / ...
+  target_type VARCHAR(50),        -- project / task / meeting / ...
+  target_id BIGINT,
+  detail JSON,
+  ip VARCHAR(45),
   created_at DATETIME DEFAULT NOW(),
-  INDEX idx_org_status (org_id, status),
-  FOREIGN KEY (org_id) REFERENCES organizations(id),
-  FOREIGN KEY (created_by) REFERENCES members(id)
+  INDEX idx_member_date (member_id, created_at)
 );
+```
 
--- 项目成员
-CREATE TABLE project_members (
+### 人资画像
+
+```sql
+-- 员工（扩展 members 表）
+-- members 表已有基础字段，以下为评估相关子表
+
+-- 评估档案
+CREATE TABLE employee_assessments (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  project_id BIGINT NOT NULL,
   member_id BIGINT NOT NULL,
-  role ENUM('pm','developer','viewer') DEFAULT 'developer',
-  joined_at DATETIME DEFAULT NOW(),
-  UNIQUE KEY uk_project_member (project_id, member_id),
-  INDEX idx_member (member_id),
-  FOREIGN KEY (project_id) REFERENCES projects(id),
+  period VARCHAR(20) NOT NULL,         -- 2026-Q2
+  -- 敬业度
+  task_completion_rate DECIMAL(5,2),   -- 任务完成率
+  avg_response_hours DECIMAL(5,2),     -- 平均响应时间
+  meeting_participation_rate DECIMAL(5,2), -- 会议参与度
+  -- 胜任力
+  technical_level ENUM('junior','mid','senior','expert'),
+  cross_project_count INT,             -- 跨项目数量
+  initiative_score DECIMAL(3,1),       -- 主动性评分（1-10）
+  -- 综合
+  overall_score DECIMAL(3,1),          -- 综合评分
+  summary TEXT,                         -- AI 生成的评估摘要
+  data_sources JSON,                    -- 数据来源明细
+  updated_at DATETIME DEFAULT NOW(),
+  UNIQUE KEY uk_member_period (member_id, period),
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
 
--- 任务
-CREATE TABLE tasks (
+-- 员工画像标签
+CREATE TABLE member_tags (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_id BIGINT NOT NULL,
+  tag VARCHAR(50) NOT NULL,            -- "技术大牛" / "跨部门协作" / "高效执行"
+  source VARCHAR(50),                  -- project / meeting / report
+  source_id BIGINT,
+  created_at DATETIME DEFAULT NOW(),
+  INDEX idx_member (member_id),
+  FOREIGN KEY (member_id) REFERENCES members(id)
+);
+```
+
+### 项目档案（含 Wiki）
+
+```sql
+-- 项目（在原 projects 表基础上增加）
+ALTER TABLE projects ADD COLUMN wiki_home_id BIGINT NULL;
+
+-- Wiki 页面
+CREATE TABLE wiki_pages (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   project_id BIGINT NOT NULL,
+  parent_id BIGINT NULL,               -- 父页面（支持多级）
   title VARCHAR(200) NOT NULL,
-  description TEXT,
-  notes TEXT,
-  column_name ENUM('todo','doing','done') DEFAULT 'todo',
-  priority ENUM('high','normal','low') DEFAULT 'normal',
-  category VARCHAR(50),
-  tags VARCHAR(200),
-  assignee_id BIGINT NULL,
+  content LONGTEXT,                    -- Markdown 内容
+  page_type ENUM('doc','meeting_minutes','report','template') DEFAULT 'doc',
+  source_id BIGINT NULL,               -- 关联来源（会议 ID / 日报 ID）
   created_by BIGINT,
-  due_date DATE,
   created_at DATETIME DEFAULT NOW(),
   updated_at DATETIME DEFAULT NOW(),
-  started_at DATETIME,
-  completed_at DATETIME,
-  INDEX idx_project_col (project_id, column_name),
-  INDEX idx_assignee (assignee_id),
-  INDEX idx_due (due_date),
+  INDEX idx_project_parent (project_id, parent_id),
   FOREIGN KEY (project_id) REFERENCES projects(id),
-  FOREIGN KEY (assignee_id) REFERENCES members(id),
   FOREIGN KEY (created_by) REFERENCES members(id)
 );
+```
 
--- 评论
-CREATE TABLE comments (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  task_id BIGINT NOT NULL,
-  member_id BIGINT,
-  content TEXT NOT NULL,
-  created_at DATETIME DEFAULT NOW(),
-  INDEX idx_task (task_id),
-  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-  FOREIGN KEY (member_id) REFERENCES members(id)
-);
+### 会议平台
 
+```sql
 -- 会议室
 CREATE TABLE meeting_rooms (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -184,8 +312,8 @@ CREATE TABLE meeting_rooms (
   name VARCHAR(100) NOT NULL,
   location VARCHAR(200),
   capacity INT DEFAULT 10,
-  wecom_room_id VARCHAR(100),         -- 企微会议室 ID
-  equipment VARCHAR(200),              -- 设备（投影/白板/视频）
+  wecom_room_id VARCHAR(100),
+  equipment VARCHAR(200),
   status ENUM('available','maintenance') DEFAULT 'available',
   FOREIGN KEY (org_id) REFERENCES organizations(id)
 );
@@ -194,22 +322,20 @@ CREATE TABLE meeting_rooms (
 CREATE TABLE meetings (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   org_id BIGINT NOT NULL,
-  project_id BIGINT NULL,              -- 关联项目（可选）
+  project_id BIGINT NULL,
   title VARCHAR(200) NOT NULL,
-  purpose TEXT NOT NULL,               -- 会议目的（必须填写）
-  agenda JSON,                         -- 议题列表 [{topic, duration_min, presenter}]
+  purpose TEXT NOT NULL,
+  agenda JSON,                         -- [{topic, duration_min, presenter}]
   status ENUM('proposed','confirmed','ongoing','completed','cancelled') DEFAULT 'proposed',
   meeting_type ENUM('decision','discussion','sync','review') NOT NULL,
-  -- decision: 拍板决策 / discussion: 讨论对齐 / sync: 信息同步 / review: 评审
-  scheduled_at DATETIME,               -- 计划时间
-  duration_min INT DEFAULT 30,          -- 预计时长（分钟）
-  room_id BIGINT NULL,                 -- 会议室
-  wecom_meeting_id VARCHAR(100),       -- 企微会议 ID
+  scheduled_at DATETIME,
+  duration_min INT DEFAULT 30,
+  room_id BIGINT NULL,
+  wecom_meeting_id VARCHAR(100),
   created_by BIGINT NOT NULL,
-  ai_suggestion TEXT,                  -- AI 对会议的建议（是否必要、议题优化）
+  ai_suggestion TEXT,
   created_at DATETIME DEFAULT NOW(),
   INDEX idx_org_project (org_id, project_id),
-  INDEX idx_status (status),
   INDEX idx_scheduled (scheduled_at),
   FOREIGN KEY (org_id) REFERENCES organizations(id),
   FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -223,6 +349,7 @@ CREATE TABLE meeting_attendees (
   member_id BIGINT NOT NULL,
   role ENUM('organizer','required','optional') DEFAULT 'required',
   rsvp ENUM('pending','accepted','declined','tentative') DEFAULT 'pending',
+  contribution_notes TEXT,             -- 个人在会议中的贡献记录
   UNIQUE KEY uk_meeting_member (meeting_id, member_id),
   FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
   FOREIGN KEY (member_id) REFERENCES members(id)
@@ -232,203 +359,138 @@ CREATE TABLE meeting_attendees (
 CREATE TABLE meeting_minutes (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   meeting_id BIGINT NOT NULL UNIQUE,
-  content TEXT,                        -- 纪要正文（Markdown）
-  decisions JSON,                      -- 决议事项 [{decision, owner, deadline}]
-  action_items JSON,                   -- 待办事项 [{task, assignee_id, due_date}]
+  content TEXT,
+  decisions JSON,                      -- [{decision, owner, deadline}]
+  action_items JSON,                   -- [{task, assignee_id, due_date}]
+  wiki_page_id BIGINT NULL,            -- 归档到项目 Wiki 的页面 ID
   generated_by_ai BOOLEAN DEFAULT FALSE,
   created_at DATETIME DEFAULT NOW(),
   updated_at DATETIME DEFAULT NOW(),
-  FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+  FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
+  FOREIGN KEY (wiki_page_id) REFERENCES wiki_pages(id)
 );
 ```
 
-## 会议管理模块
+### 日报平台
 
-### 核心理念：AI 判断 → 精准开会
-
-```
-发起意图 → AI 判断 → 创建会议 → 预订会议室 → 开会 → 会议纪要 → 关联任务
-   │           │           │           │          │         │          │
- "这事要    "不需要开会，   填好目的    接企微      实际      AI 生成     会议结论
-  讨论下"    发条消息就行"   议题/时长   接口订房    开会      纪要草稿    转为任务
-```
-
-### AI 判断逻辑（Skill 内置）
-
-用户说"这个事要不要开会讨论一下"时，AI 会评估：
-
-**不需要开会（发消息/文档就行）：**
-- 单向通知类（"下周上线日期改了"）
-- 简单确认类（"这个方案行不行" → 发文档让人批注）
-- 信息同步类（"进度更新一下" → 看看板就行）
-- 已有结论类（"就这么定了" → 直接执行）
-
-**需要开会：**
-- 需要多人实时讨论、有分歧要对齐
-- 涉及跨部门协调
-- 需要做决策（拍板类）
-- 复杂问题需要头脑风暴
-
-AI 拒绝开会时会说：
-> "这个事不需要开会，我帮你发条消息给相关人就行。要开的话告诉我具体要讨论什么。"
-
-### Skill: `todo-board-meeting` — 会议管理
-
-```
-触发词：开会、会议、讨论一下、要不要开会
-
-核心流程：
-
-1. 发起判断
-   用户："Q2 营销方案要不要开个会讨论一下？"
-   AI：评估后回复 →
-     ✅ "有必要，涉及市场部和产品部对齐。我帮你建个会：
-        目的：对齐 Q2 营销方案方向和资源分配
-        建议参会：市场部小王、产品部小李、技术部小张
-        预计时长：45 分钟
-        要发吗？"
-     ❌ "不需要开会，这个事发条消息让小王确认就行。"
-
-2. 创建会议
-   用户："发吧，明天下午 2 点"
-   AI：
-     - 创建会议记录
-     - 填写目的/议题/参会人
-     - 调企微接口预订会议室
-     - 发送会议邀请给参会人
-     - 返回确认信息
-
-3. 会后纪要
-   用户："会开完了，帮我整理一下"
-   AI：
-     - 根据会议主题生成纪要草稿
-     - 提取决议事项和待办
-     - 待办自动转为项目任务
-     - 纪要存档
-
-4. 会议查询
-   - "这周有什么会？" → 列出本周会议
-   - "Q2 营销开过几次会了？" → 按项目查会议历史
-   - "上次会的决议执行了吗？" → 查决议对应的待办状态
-
-企微集成：
-- POST /wecom/book-room  → 预订会议室
-- POST /wecom/meeting     → 创建企微会议
-- GET  /wecom/rooms       → 查询可用会议室
+```sql
+-- 日报/周报/月报
+CREATE TABLE reports (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_id BIGINT NOT NULL,
+  report_type ENUM('daily','weekly','monthly') NOT NULL,
+  period DATE NOT NULL,                -- 日期/周起始/月起始
+  content TEXT NOT NULL,               -- 报告正文（Markdown）
+  highlights TEXT,                     -- 亮点
+  blockers TEXT,                       -- 阻塞/问题
+  tomorrow_plan TEXT,                  -- 明日/下周/下月计划
+  source ENUM('auto','manual','hybrid') DEFAULT 'manual',
+  -- auto: 系统从项目数据生成
+  -- manual: 用户口述
+  -- hybrid: 系统生成 + 用户补充
+  auto_generated_content TEXT,         -- 系统生成的原始内容（hybrid 模式）
+  project_updates JSON,                -- 反向更新项目的记录 [{project_id, task_id, action}]
+  status ENUM('draft','submitted') DEFAULT 'draft',
+  created_at DATETIME DEFAULT NOW(),
+  updated_at DATETIME DEFAULT NOW(),
+  UNIQUE KEY uk_member_type_period (member_id, report_type, period),
+  INDEX idx_member_date (member_id, period),
+  FOREIGN KEY (member_id) REFERENCES members(id)
+);
 ```
 
-### 会议与项目的关系
+## Skill 体系
 
 ```
-项目 A
-├── 看板（任务）
-├── 成员
-└── 会议
-    ├── 周一对齐会（每周，sync）
-    ├── 方案评审会（一次，review）
-    └── 上线决策会（一次，decision）
-
-每个会议的决议 → 自动生成待办 → 回到看板
+OpenClaw 路由
+    │
+    ├── todo-board-admin     → 项目/成员/任务管理
+    ├── todo-board-meeting   → 会议判断/发起/纪要
+    ├── todo-board-report    → 日报/周报/月报生成
+    ├── todo-board-notify    → 提醒/通知/周报推送
+    ├── todo-board-hr        → 人资画像查询/评估更新
+    ├── todo-board-wiki      → 项目文档管理
+    └── todo-board-infra     → AI 用量/Key/Skill 管理
 ```
 
-### 为什么这样设计
-
-| 痛点 | 传统方式 | 我们的方式 |
-|------|---------|----------|
-| 乱开会 | 谁都能发，没人判断 | AI 先评估，过滤无效会议 |
-| 会议没目的 | 标题写"讨论一下"，没议程 | 必须填 purpose，AI 帮补全 agenda |
-| 开完没结论 | 会议纪要写不写随缘 | AI 生成纪要，决议自动转待办 |
-| 会议室冲突 | 手动查日历、抢房间 | 企微接口自动预订 |
-| 不知道开了什么会 | 会议记录散落各处 | 按项目归档，可追溯 |
-
-## OpenClaw Skill 体系（核心差异化）
-
-这不是"顺便加个 Skill"，而是 **Skill 是主要操作界面**。
-
-### Skill: `todo-board-admin` — 集团管理
+### Skill: `todo-board-admin` — 项目管理
 
 ```
-触发词：项目管理、团队管理、组织架构、成员管理
-
-能力：
-- "建个项目叫 XXX" → POST /api/projects
-- "把小王加到 Q2 营销项目" → POST /api/projects/:id/members
-- "小李调到产品部" → PUT /api/members/:id
-- "集团现在什么情况？" → GET /api/dashboard
-- "Q2 营销进度怎么样？" → GET /api/projects/:id/progress
-- "哪些任务过期了？" → GET /api/tasks?overdue=true
-- "把写方案分给小王" → PUT /api/tasks/:id {assignee_id}
-- "归档 Q1 项目" → PUT /api/projects/:id {status: archived}
-```
-
-### Skill: `todo-board-notify` — 通知提醒
-
-```
-能力：
-- 每日过期任务提醒（cron）
-- 任务被分配时通知当事人
-- 项目进度周报（cron，每周一）
-- @某人 时推送消息
-
-通知渠道：飞书 / OpenClaw 消息
-```
-
-### Skill: `todo-board-report` — 报告生成
-
-```
-能力：
-- "出一份集团项目周报" → 聚合所有项目进度
-- "技术部这个月完成了多少任务" → 按部门统计
-- "小王手上还有多少活" → 按人统计工作量
+- "建个项目叫 XXX" → 创建项目
+- "把小王加到 Q2 营销项目" → 添加成员
+- "把写方案分给小王" → 分配任务
+- "Q2 营销进度怎么样？" → 查进度
+- "归档 Q1 项目" → 项目归档
 ```
 
 ### Skill: `todo-board-meeting` — 会议管理
 
 ```
-触发词：开会、会议、讨论一下、要不要开会
-
-能力：
-- "这事要不要开会？" → AI 判断是否必要
-- "发个会，明天下午2点" → 创建会议 + 预订会议室 + 通知参会人
-- "会开完了，整理一下" → AI 生成纪要 + 提取待办
-- "这周有什么会？" → 会议日程查询
+- "这事要不要开个会？" → AI 判断
+- "发个会，明天下午2点" → 创建 + 预订 + 通知
+- "会开完了，整理一下" → 纪要 + 待办转入项目
+- "上次会的决议执行了吗？" → 查决议状态
 ```
 
-### Skill 分工总览
+### Skill: `todo-board-report` — 日报系统
 
 ```
-用户说 ──→ OpenClaw 路由
-              │
-              ├── admin  → 项目/成员/任务管理
-              ├── notify → 提醒/通知/周报
-              ├── report → 统计/报告
-              └── meeting → 会议判断/发起/纪要
-                    │
-                    └──→ TodoBoard API ──→ MySQL
-                                              │
-                                              └──→ 看板（只读展示）
+- "帮我写今天的日报" → 从项目数据自动生成
+- "今天做了 XX 方案和 YY 评审" → 结构化 → 写入日报
+  → 同时更新项目进度
+  → 同时更新员工画像
+- "这周周报" → 聚合本周日报
+- "小王这个月干了什么？" → 查月报
 ```
 
-## 页面结构（精简）
-
-只保留**查看型**页面，不做管理后台：
+### Skill: `todo-board-hr` — 人资画像
 
 ```
-/                    → 仪表盘（我的任务、我参与的项目、过期提醒）
+- "小王这个人怎么样？" → 查员工画像
+- "技术部谁最能打？" → 按评估排名
+- "小王这季度评估" → 查季度评估
+- "更新小王的技术等级为高级" → 修改评估
+- "出一份部门人才盘点" → 批量评估报告
+```
+
+### Skill: `todo-board-wiki` — 项目文档
+
+```
+- "Q2 项目的需求文档在哪？" → 搜索 Wiki
+- "把这份会议纪要归档到项目 Wiki" → 自动归档
+- "写个技术方案" → 创建 Wiki 页面
+- "Q2 项目文档目录" → 列出 Wiki 树
+```
+
+### Skill: `todo-board-infra` — AI 基础设施
+
+```
+- "这个月 AI 用了多少 token？" → 用量统计
+- "给日报系统加个 Key" → 创建 API Key
+- "哪些 Skill 在用？" → Skill 列表
+- "禁用 XX Skill" → Skill 管理
+```
+
+## 页面结构（极简）
+
+只保留**只读展示**页面：
+
+```
+/                    → 仪表盘（我的任务、会议、日报、待办）
 /login               → 登录
-/projects            → 项目列表（只读卡片）
-/projects/:id        → 项目看板（只读 + 少量操作：拖拽改状态、评论）
-/meetings            → 会议日历（只读）
+/projects            → 项目列表
+/projects/:id        → 项目看板 + Wiki 入口
+/projects/:id/wiki   → 项目文档空间
+/meetings            → 会议日历
+/reports             → 我的日报/周报
 ```
 
-**不做的页面（全部由 OpenClaw 替代）：**
-- ❌ 成员管理页面 → "把小王加进来"
-- ❌ 部门管理页面 → "建个部门叫产品部"
-- ❌ 项目设置页面 → "Q2 项目改成暂停"
-- ❌ 权限配置页面 → "小李在 Q2 项目里是 PM"
-- ❌ 报表页面 → "出个周报"
-- ❌ 会议室预订 → "明天下午3点帮我订个会议室"
-- ❌ 会议发起 → "这事要不要开个会"
+**不做的页面（全部走 OpenClaw 对话）：**
+- 成员管理、部门管理、权限配置
+- 会议室预订、会议发起
+- 日报填写、周报生成
+- 人资评估、人才盘点
+- AI 用量、Key 管理
 
 ## 服务器配置方案
 
@@ -438,12 +500,11 @@ AI 拒绝开会时会说：
 配置：2 核 4G 云服务器 × 1
 系统：Ubuntu 22.04
 服务：
-  - Node.js (Express)  ← 应用层
-  - MySQL 8.0           ← 数据库
-  - Nginx               ← 反向代理
+  - Node.js (Express)
+  - MySQL 8.0
+  - Nginx
 成本：约 ¥100-200/月
-
-适合：团队内测、功能验证、小部门试用
+适合：功能验证、小部门试用
 ```
 
 ### Phase 2 — 小规模生产（50-300 人）
@@ -452,12 +513,11 @@ AI 拒绝开会时会说：
 配置：4 核 8G 云服务器 × 1
 系统：Ubuntu 22.04
 服务：
-  - Node.js (PM2 集群模式, 2 worker)
+  - Node.js (PM2 集群, 2 worker)
   - MySQL 8.0（同机）
   - Nginx + SSL
-  - 每日自动备份（mysqldump → 对象存储）
+  - 每日自动备份
 成本：约 ¥300-500/月
-
 适合：单部门或小公司全面使用
 ```
 
@@ -468,15 +528,12 @@ AI 拒绝开会时会说：
   - 应用层：4 核 8G × 2（负载均衡）
   - 数据库：4 核 16G × 1（独立 MySQL）
   - Redis：2G × 1（Session + 缓存）
-系统：Ubuntu 22.04
 服务：
   - Node.js (PM2, 4 worker per node)
-  - MySQL 8.0（独立服务器，主从可选）
-  - Redis（Session 存储 + API 缓存）
-  - Nginx（负载均衡 + SSL）
+  - MySQL 8.0（独立，主从可选）
+  - Redis + Nginx
   - 每日备份 + binlog
 成本：约 ¥1000-2000/月
-
 适合：中型公司全面使用
 ```
 
@@ -484,21 +541,18 @@ AI 拒绝开会时会说：
 
 ```
 配置：
-  - 应用层：4 核 8G × 3+（K8s 或 PM2 集群）
+  - 应用层：4 核 8G × 3+（K8s / PM2 集群）
   - 数据库：8 核 32G × 2（MySQL 主从）
-  - Redis：4G × 2（Sentinel 高可用）
+  - Redis：4G × 2（Sentinel HA）
   - 对象存储：文件附件
-系统：Ubuntu 22.04 / Docker
 服务：
-  - Node.js (Docker 容器化)
-  - MySQL 8.0（主从复制，读写分离）
-  - Redis Sentinel（高可用）
-  - Nginx / Caddy（反向代理 + 自动 SSL）
-  - 监控：Prometheus + Grafana 或云监控
-  - 日志：ELK 或云日志
-  - 备份：每日全量 + binlog 增量 + 异地
+  - Docker 容器化
+  - MySQL 主从 + 读写分离
+  - Redis Sentinel
+  - 监控（Prometheus + Grafana）
+  - 日志（ELK / 云日志）
+  - 备份（全量 + 增量 + 异地）
 成本：约 ¥3000-6000/月
-
 适合：集团级部署
 ```
 
@@ -511,63 +565,71 @@ AI 拒绝开会时会说：
 | 中规模 | 300-1000 | 4C8G ×2 | 独立 4C16G | Redis 2G | ¥1000-2000 |
 | 大规模 | 1000-3000+ | 4C8G ×3+ | 8C32G 主从 | Redis 4G HA | ¥3000-6000 |
 
-### 扩容路径
-
-```
-内测 ──→ 小规模 ──→ 中规模 ──→ 大规模
- │         │          │          │
- 2C4G     4C8G      分离 DB    K8s + 主从
- 单机     单机       + 负载均衡  + 监控
- MySQL    MySQL+备份  Redis     Redis HA
-
-关键节点：
-- 50 人：加 PM2 集群 + 自动备份
-- 300 人：数据库独立 + Redis
-- 1000 人：应用层多节点 + 读写分离
-- 2000 人：容器化 + 完整监控
-```
-
 ## 开发分期
 
-### Phase 1 — 数据库升级 + 多项目（3 天）
-- [ ] MySQL 建表 + Prisma schema
-- [ ] 迁移脚本（v1 SQLite → v2 MySQL）
+### Phase 1 — 项目管理核心（3 天）
+- [ ] MySQL 建表 + Prisma schema（全量表）
 - [ ] 项目 CRUD API
 - [ ] 任务按项目隔离
 - [ ] 成员 CRUD API
-- [ ] 前端：项目列表页 + 看板适配
+- [ ] 前端：项目列表 + 看板
 
-### Phase 2 — OpenClaw Skill: admin（2 天）
-- [ ] todo-board-admin SKILL.md
-- [ ] 对话式创建项目/成员/任务
-- [ ] 对话式查询进度/统计
-- [ ] 对话式管理（分配、归档、调部门）
+### Phase 2 — 项目管理 Skill（2 天）
+- [ ] todo-board-admin Skill
+- [ ] 对话式创建/查询/管理
+- [ ] 仪表盘（我的任务）
 
 ### Phase 3 — 认证 + 权限（2 天）
 - [ ] JWT 登录
-- [ ] 集团角色中间件
-- [ ] 项目角色中间件
+- [ ] 集团角色 + 项目角色中间件
 - [ ] 前端登录态
 
-### Phase 4 — 通知 + 报告（2 天）
-- [ ] todo-board-notify Skill（cron 提醒）
-- [ ] todo-board-report Skill（周报生成）
-- [ ] 任务分配实时通知
-
-### Phase 5 — 会议管理（3 天）
+### Phase 4 — 会议系统（3 天）
 - [ ] 会议数据模型 + CRUD API
 - [ ] todo-board-meeting Skill（AI 判断 + 创建 + 纪要）
-- [ ] 企微接口集成（会议室预订 + 会议邀请）
-- [ ] 纪要生成 + 待办自动转入项目
+- [ ] 企微接口集成
+- [ ] 纪要生成 + 待办转入项目
+- [ ] 纪要归档到 Wiki
 
-### Phase 6 — 增强（后续）
+### Phase 5 — 日报系统（2 天）
+- [ ] 日报数据模型 + CRUD API
+- [ ] todo-board-report Skill（自动生成 + 手动补充）
+- [ ] 日报反向更新项目进度
+- [ ] 日报 → 员工画像数据
+
+### Phase 6 — 人资画像（2 天）
+- [ ] 评估档案数据模型
+- [ ] todo-board-hr Skill
+- [ ] 从项目/会议/日报自动汇聚评估数据
+- [ ] 员工画像展示页
+
+### Phase 7 — Wiki + AI Infra（2 天）
+- [ ] Wiki 页面 CRUD + Markdown 编辑器
+- [ ] todo-board-wiki Skill
+- [ ] AI Infra 数据模型 + API
+- [ ] todo-board-infra Skill
+- [ ] 用量统计 + Key 管理
+
+### Phase 8 — 增强（后续）
 - Socket.io 实时同步
 - 甘特图
 - 文件附件
 - 数据导出
+- 通知中心
+
+## 不碰的边界
+
+| 做 | 不做（留给 OA） |
+|----|----------------|
+| 项目管理 | 流程审批 |
+| 会议管理 | 考勤打卡 |
+| 日报/周报 | 薪酬计算 |
+| 人资画像 | 招聘管理 |
+| Wiki 文档 | 合同管理 |
+| AI 基础设施 | 财务系统 |
 
 ## 与 v1 的关系
 
 - v1 开源版继续维护（单项目、SQLite、无登录）
-- v2 是企业版，MySQL + 多项目 + 登录 + Skill 驱动 + 会议管理
+- v2 是企业版，五个子系统 + Skill 驱动
 - 代码层面：v2 fork 后升级，核心看板逻辑复用
