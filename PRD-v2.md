@@ -46,7 +46,7 @@
 
 ### 2. 人资画像平台
 
-完整的人力主数据 + 评估档案。
+完整的人力主数据 + 评估档案 + 绩效参考数据。
 
 ```
 主数据：
@@ -72,8 +72,46 @@
 │  ├── Q1: 完成 XX 项目核心模块          │
 │  ├── Q2: 晋升为技术负责人              │
 │  └── 近期：主导了 YY 方案评审          │
+│                                      │
+│ 绩效参考（辅助维度，非正式评估）         │
+│  ├── 本季度任务交付量：47 项           │
+│  ├── 按时完成率：89%                  │
+│  ├── 项目贡献度：核心模块 ×2           │
+│  └── 同行评价：会议中被提及 8 次       │
 └──────────────────────────────────────┘
 ```
+
+#### 绩效数据的定位
+
+**重要：绩效数据是参考维度，不是正式绩效评估。**
+
+- 我们提供的是**工作产出的事实数据**（做了什么、完成多少、响应多快）
+- 正式绩效评估（KPI 打分、360 评估、晋升决定）仍然由 HR 通过传统流程完成
+- 我们的数据作为**输入素材**，帮助评估者更客观地判断
+- 人资画像平台可以与企业现有的绩效系统（如飞书 People、北森等）做数据同步
+
+```
+我们的角色：事实数据提供者
+HR 的角色：评估决策者
+
+项目/会议/日报 → 事实数据 → 人资画像 → 同步给 HR 系统
+                                            ↓
+                                    HR 结合主观判断
+                                            ↓
+                                    正式绩效结果
+```
+
+#### 绩效参考数据来源
+
+| 指标 | 数据来源 | 更新频率 |
+|------|---------|----------|
+| 任务交付量 | 项目系统（tasks 完成数） | 实时 |
+| 按时完成率 | 项目系统（due_date vs completed_at） | 实时 |
+| 项目贡献度 | 项目系统（创建/指派的任务权重） | 按项目 |
+| 响应速度 | 日报系统（提交时间 vs 任务更新时间） | 每日 |
+| 会议汇报质量 | 会议系统（contribution_notes） | 每次会议 |
+| 同行评价 | 会议系统（被引用/提及次数） | 每次会议 |
+| 主动性 | 日报系统（自驱任务 vs 指派任务比例） | 每周 |
 
 ### 3. 项目档案平台（原 TodoBoard 升级）
 
@@ -243,7 +281,7 @@ CREATE TABLE audit_logs (
 -- 员工（扩展 members 表）
 -- members 表已有基础字段，以下为评估相关子表
 
--- 评估档案
+-- 评估档案（事实数据，非正式绩效）
 CREATE TABLE employee_assessments (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   member_id BIGINT NOT NULL,
@@ -256,8 +294,14 @@ CREATE TABLE employee_assessments (
   technical_level ENUM('junior','mid','senior','expert'),
   cross_project_count INT,             -- 跨项目数量
   initiative_score DECIMAL(3,1),       -- 主动性评分（1-10）
+  -- 绩效参考（事实数据，辅助 HR 评估）
+  tasks_delivered INT,                 -- 本周期交付任务数
+  on_time_rate DECIMAL(5,2),           -- 按时完成率
+  core_contributions INT,              -- 核心贡献项数（高优任务/关键模块）
+  peer_mentions INT,                   -- 会议中被同行提及次数
+  self_driven_ratio DECIMAL(5,2),      -- 自驱任务占比（vs 指派任务）
   -- 综合
-  overall_score DECIMAL(3,1),          -- 综合评分
+  overall_score DECIMAL(3,1),          -- 综合评分（AI 计算）
   summary TEXT,                         -- AI 生成的评估摘要
   data_sources JSON,                    -- 数据来源明细
   updated_at DATETIME DEFAULT NOW(),
